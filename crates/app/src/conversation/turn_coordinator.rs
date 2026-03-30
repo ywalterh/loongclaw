@@ -85,10 +85,9 @@ use super::turn_engine::{
 use super::turn_shared::{
     ProviderTurnRequestAction, ReplyPersistenceMode, ReplyResolutionMode, ToolDrivenFollowupKind,
     ToolDrivenFollowupPayload, ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
-    build_tool_driven_followup_tail, build_tool_loop_guard_tail,
+    build_completion_pass_messages, build_tool_driven_followup_tail, build_tool_loop_guard_tail,
     decide_provider_turn_request_action, format_approval_required_reply, next_conversation_turn_id,
-    build_completion_pass_messages, reduce_followup_payload_for_model,
-    request_completion_with_raw_fallback,
+    reduce_followup_payload_for_model, request_completion_with_raw_fallback,
     tool_driven_followup_payload, tool_loop_circuit_breaker_reply,
     tool_result_contains_truncation_signal, user_requested_raw_tool_output,
 };

@@ -12,6 +12,7 @@ Catalog of design documents and architectural decisions.
 | [Provider Runtime Roadmap](provider-runtime-roadmap.md) | Provider/runtime evolution strategy | Active |
 | [ACP/ACPX Pre-Embed](acp-acpx-preembed.md) | Advanced cryptographic primitives | Active |
 | [Harness Engineering](harness-engineering.md) | Environment design for agent-driven development | Active |
+| [Self-Evolution](evolution.md) | Autonomous code fix/improve cycle with rollback and breadcrumbs | Active |
 
 ## Key Patterns
 

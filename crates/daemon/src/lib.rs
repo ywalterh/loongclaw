@@ -76,6 +76,7 @@ pub mod browser_preview;
 mod cli_handoff;
 pub mod completions_cli;
 pub mod doctor_cli;
+pub mod evolve_cli;
 pub mod feishu_cli;
 pub mod feishu_support;
 pub mod import_cli;
@@ -737,6 +738,25 @@ pub enum Commands {
     Feishu {
         #[command(subcommand)]
         command: feishu_cli::FeishuCommand,
+    },
+    /// Run self-evolution cycle: detect issues, apply fixes, verify, keep or rollback
+    Evolve {
+        #[arg(long)]
+        config: Option<String>,
+        #[arg(long, value_enum, default_value = "scan")]
+        mode: evolve_cli::EvolveMode,
+        #[arg(long, default_value_t = false)]
+        json: bool,
+        #[arg(long, default_value_t = false)]
+        dry_run: bool,
+        #[arg(long)]
+        max_mutations: Option<u32>,
+        /// Enable watch mode with scan interval in seconds
+        #[arg(long)]
+        watch: Option<u64>,
+        /// Force full evolution every N seconds (only in watch mode)
+        #[arg(long)]
+        force_interval: Option<u64>,
     },
     /// Print a shell completion script to stdout
     Completions {

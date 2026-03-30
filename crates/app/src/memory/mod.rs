@@ -13,6 +13,8 @@ use crate::config::MemoryBackendKind;
 
 mod canonical;
 mod context;
+#[cfg(feature = "memory-sqlite")]
+pub mod evolution_store;
 mod kernel_adapter;
 mod orchestrator;
 mod protocol;

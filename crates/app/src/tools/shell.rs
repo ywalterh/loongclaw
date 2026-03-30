@@ -62,7 +62,10 @@ pub(super) fn execute_shell_tool_with_config(
         let (command, args) =
             if raw_command.contains(char::is_whitespace) && explicit_args.is_empty() {
                 if contains_shell_operators(raw_command) {
-                    ("sh".to_owned(), vec!["-c".to_owned(), raw_command.to_owned()])
+                    (
+                        "sh".to_owned(),
+                        vec!["-c".to_owned(), raw_command.to_owned()],
+                    )
                 } else {
                     let mut parts = raw_command.split_whitespace();
                     let cmd = parts.next().unwrap_or(raw_command);

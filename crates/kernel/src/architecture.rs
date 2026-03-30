@@ -57,6 +57,7 @@ impl Default for ArchitectureBoundaryPolicy {
                 "crates/kernel/src/architecture.rs".to_owned(),
                 "crates/kernel/src/awareness.rs".to_owned(),
                 "crates/kernel/src/connector.rs".to_owned(),
+                "crates/kernel/src/evolution.rs".to_owned(),
                 "crates/kernel/src/integration.rs".to_owned(),
                 "crates/kernel/src/memory.rs".to_owned(),
                 "crates/kernel/src/plugin.rs".to_owned(),

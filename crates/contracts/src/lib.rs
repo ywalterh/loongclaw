@@ -14,6 +14,8 @@ mod runtime_types;
 mod task_state;
 mod tool_types;
 
+pub mod evolution_types;
+
 pub use audit_types::{AuditEvent, AuditEventKind, ExecutionPlane, PlaneTier};
 pub use clock::{Clock, FixedClock, SystemClock};
 pub use contracts::{
@@ -40,4 +42,10 @@ pub use runtime_types::{
 pub use task_state::TaskState;
 pub use tool_types::{
     ToolCoreOutcome, ToolCoreRequest, ToolExtensionOutcome, ToolExtensionRequest, ToolTier,
+};
+
+pub use evolution_types::{
+    EvolutionBreadcrumb, EvolutionConfig, EvolutionDecision, EvolutionIssue, EvolutionIssueKind,
+    EvolutionMode, EvolutionPhase, EvolutionReport, EvolutionSessionSummary, EvolutionTrigger,
+    IssueSeverity, ShellOutput,
 };

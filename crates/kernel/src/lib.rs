@@ -8,6 +8,7 @@ pub mod clock;
 pub mod connector;
 pub mod contracts;
 pub mod errors;
+pub mod evolution;
 pub mod harness;
 pub mod integration;
 pub mod kernel;
@@ -41,6 +42,11 @@ pub use contracts::{
     Capability, CapabilityToken, ConnectorCommand, ConnectorOutcome, ExecutionRoute, Fault,
     HarnessKind, HarnessOutcome, HarnessRequest, Namespace, TaskIntent, TaskState,
 };
+pub use contracts::{
+    EvolutionBreadcrumb, EvolutionConfig, EvolutionDecision, EvolutionIssue, EvolutionIssueKind,
+    EvolutionMode, EvolutionPhase, EvolutionReport, EvolutionSessionSummary, EvolutionTrigger,
+    IssueSeverity, ShellOutput,
+};
 pub use errors::{
     AuditError, ConnectorError, HarnessError, IntegrationError, KernelError, MemoryPlaneError,
     PackError, PolicyError, RuntimePlaneError, ToolPlaneError,
@@ -70,6 +76,11 @@ pub use runtime::{
     RuntimeExtensionOutcome, RuntimeExtensionRequest, RuntimePlane, RuntimeTier,
 };
 pub use task_supervisor::TaskSupervisor;
+
+pub use evolution::{
+    Diagnosis, EvolutionEngine, EvolutionExecutor, PatchRecord, PatchStrategy, SnapshotRecord,
+    VerifyOutcome,
+};
 pub use tool::{
     CoreToolAdapter, ToolCoreOutcome, ToolCoreRequest, ToolExtensionAdapter, ToolExtensionOutcome,
     ToolExtensionRequest, ToolPlane, ToolTier,

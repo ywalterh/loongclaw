@@ -517,6 +517,26 @@ async fn main() {
             .await
         }
         Commands::Feishu { command } => feishu_cli::run_feishu_command(command).await,
+        Commands::Evolve {
+            config,
+            mode,
+            json,
+            dry_run,
+            max_mutations,
+            watch,
+            force_interval,
+        } => {
+            evolve_cli::run_evolve_cli(evolve_cli::EvolveCommandOptions {
+                config,
+                mode,
+                json,
+                dry_run,
+                max_mutations,
+                watch,
+                force_interval,
+            })
+            .await
+        }
         Commands::Completions { shell } => {
             completions_cli::run_completions_cli(completions_cli::CompletionsCommandOptions {
                 shell,

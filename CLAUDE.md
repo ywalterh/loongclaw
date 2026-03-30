@@ -75,6 +75,7 @@ Use `task verify` for the stricter local superset (architecture, conventions, do
 | Layered architecture | `docs/design-docs/layered-kernel-design.md` |
 | Design decisions, patterns & catalog | `docs/design-docs/index.md` |
 | Harness engineering | `docs/design-docs/harness-engineering.md` |
+| Self-evolution system | `docs/design-docs/evolution.md` |
 | Roadmap | `docs/ROADMAP.md` |
 | Reliability invariants | `docs/RELIABILITY.md` |
 | Security model & gaps | `docs/SECURITY.md` |
