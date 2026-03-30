@@ -1,6 +1,6 @@
 use serde_json::{Value, json};
 
-use crate::config::{LoongClawConfig, ProviderProtocolFamily, ReasoningEffort};
+use crate::config::{LoongClawConfig, ProviderKind, ProviderProtocolFamily, ReasoningEffort};
 
 use super::capability_profile_runtime::ProviderCapabilityProfile;
 use super::contracts::{
@@ -173,6 +173,17 @@ pub(super) fn build_turn_request_body_with_capability(
             {
                 object.insert("tools".to_owned(), Value::Array(tool_definitions.to_vec()));
                 object.insert("tool_choice".to_owned(), json!("auto"));
+            }
+            if matches!(
+                config.provider.kind,
+                ProviderKind::Ollama
+                    | ProviderKind::Llamacpp
+                    | ProviderKind::LmStudio
+                    | ProviderKind::Sglang
+                    | ProviderKind::Vllm
+            ) && let Some(object) = body.as_object_mut()
+            {
+                object.insert("think".to_owned(), json!(false));
             }
             body
         }

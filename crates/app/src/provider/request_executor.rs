@@ -14,6 +14,47 @@ use tokio::time::sleep;
 use crate::config::ProviderConfig;
 use crate::conversation::turn_engine::{ProviderTurn, ToolIntent};
 
+/// Write a provider request/response pair to a JSONL debug log.
+/// The log path is `~/.loongclaw/provider-debug.jsonl`.
+/// This is a best-effort append — failures are silently ignored.
+fn log_provider_exchange(
+    model: &str,
+    endpoint: &str,
+    request_body: &Value,
+    response_body: Option<&Value>,
+    status: Option<u16>,
+    elapsed_ms: u64,
+    error: Option<&str>,
+) {
+    use std::io::Write;
+    let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) else {
+        return;
+    };
+    let log_path = std::path::PathBuf::from(home)
+        .join(".loongclaw")
+        .join("provider-debug.jsonl");
+    let entry = serde_json::json!({
+        "ts": std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0),
+        "model": model,
+        "endpoint": endpoint,
+        "request": request_body,
+        "response": response_body,
+        "status": status,
+        "elapsed_ms": elapsed_ms,
+        "error": error,
+    });
+    if let Ok(mut file) = std::fs::OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&log_path)
+    {
+        let _ = writeln!(file, "{}", entry);
+    }
+}
+
 use super::{
     auth_profile_runtime::ProviderAuthProfile,
     contracts::{
@@ -153,6 +194,7 @@ where
     loop {
         attempt += 1;
         let body = build_body(payload_mode);
+        let request_start = std::time::Instant::now();
         let request_endpoint =
             transport::resolve_request_endpoint(runtime.provider, runtime.endpoint, runtime.model);
         let request_endpoint =
@@ -285,6 +327,15 @@ where
                     })?;
 
                 if status.is_success() {
+                    log_provider_exchange(
+                        runtime.model,
+                        runtime.endpoint,
+                        &body,
+                        Some(&response_body),
+                        Some(status.as_u16()),
+                        request_start.elapsed().as_millis() as u64,
+                        None,
+                    );
                     let parsed = parse_success(&response_body).ok_or_else(|| {
                         build_model_request_error(
                             format!(
@@ -322,6 +373,15 @@ where
                 }
 
                 let status_code = status.as_u16();
+                log_provider_exchange(
+                    runtime.model,
+                    runtime.endpoint,
+                    &body,
+                    Some(&response_body),
+                    Some(status_code),
+                    request_start.elapsed().as_millis() as u64,
+                    Some(&format!("status_{status_code}")),
+                );
                 match plan_model_status_outcome(
                     status_code,
                     &response_headers,

@@ -87,7 +87,8 @@ use super::turn_shared::{
     ToolDrivenFollowupPayload, ToolDrivenReplyBaseDecision, ToolDrivenReplyPhase,
     build_tool_driven_followup_tail, build_tool_loop_guard_tail,
     decide_provider_turn_request_action, format_approval_required_reply, next_conversation_turn_id,
-    reduce_followup_payload_for_model, request_completion_with_raw_fallback,
+    build_completion_pass_messages, reduce_followup_payload_for_model,
+    request_completion_with_raw_fallback,
     tool_driven_followup_payload, tool_loop_circuit_breaker_reply,
     tool_result_contains_truncation_signal, user_requested_raw_tool_output,
 };
@@ -2518,7 +2519,7 @@ async fn prepare_provider_turn_continue_phase<R: ConversationRuntime + ?Sized>(
 
 async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
     runtime: &R,
-    _config: &LoongClawConfig,
+    config: &LoongClawConfig,
     session_id: &str,
     preparation: &ProviderTurnPreparation,
     continue_phase: &ProviderTurnContinuePhase,
@@ -2629,6 +2630,46 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
 
         match reply_decision {
             ReplyLoopDecision::FinalizeDirect(reply) => {
+                // When agentic followup is enabled and we've been through at
+                // least one tool round, check if the "final" reply is just a
+                // short stub (the model stopped calling tools but didn't
+                // produce a real summary).  Force a completion pass so the
+                // model produces a proper answer from the original context.
+                const AGENTIC_MIN_FINAL_REPLY_CHARS: usize = 200;
+                if config.conversation.agentic_tool_followup
+                    && provider_round_index > 0
+                    && reply.trim().chars().count() < AGENTIC_MIN_FINAL_REPLY_CHARS
+                {
+                    let tool_context = tool_driven_followup_payload(
+                        current_continue_phase.lane_execution.had_tool_intents,
+                        &current_continue_phase.lane_execution.turn_result,
+                    )
+                    .map(|p| p.message_context().1.to_owned())
+                    .unwrap_or_default();
+                    let completion_messages = build_completion_pass_messages(
+                        &preparation.session.messages,
+                        current_continue_phase
+                            .lane_execution
+                            .assistant_preface
+                            .as_str(),
+                        &tool_context,
+                        user_input,
+                    );
+                    let enriched = request_completion_with_raw_fallback(
+                        runtime,
+                        &current_continue_phase.followup_config,
+                        &completion_messages,
+                        binding,
+                        reply.as_str(),
+                    )
+                    .await;
+                    let checkpoint = current_continue_phase.checkpoint(
+                        preparation,
+                        user_input,
+                        enriched.as_str(),
+                    );
+                    return ResolvedProviderTurn::persist_reply(enriched, checkpoint);
+                }
                 let checkpoint = current_continue_phase.checkpoint(preparation, user_input, &reply);
                 return ResolvedProviderTurn::persist_reply(reply, checkpoint);
             }
@@ -2647,6 +2688,7 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                     followup.clone(),
                     user_input,
                     loop_warning_reason.as_deref(),
+                    config.conversation.agentic_tool_followup,
                 );
                 if current_continue_phase
                     .lane_execution
@@ -2787,11 +2829,31 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                         }
                     }
                 }
-                if requires_completion_pass {
+                // When agentic followup is enabled, always do a completion pass
+                // (no tool definitions) when rounds are exhausted, so the model
+                // is forced to produce a text summary instead of more tool calls.
+                if requires_completion_pass || config.conversation.agentic_tool_followup {
+                    // For agentic completion, build dedicated messages with a
+                    // stronger prompt and stripped markers so the model does not
+                    // hallucinate tool-result syntax as plain text.
+                    let completion_messages = if config.conversation.agentic_tool_followup {
+                        let (_label, tool_text) = followup.message_context();
+                        build_completion_pass_messages(
+                            &preparation.session.messages,
+                            current_continue_phase
+                                .lane_execution
+                                .assistant_preface
+                                .as_str(),
+                            tool_text,
+                            user_input,
+                        )
+                    } else {
+                        follow_up_messages.clone()
+                    };
                     let reply = request_completion_with_raw_fallback(
                         runtime,
                         &current_continue_phase.followup_config,
-                        &follow_up_messages,
+                        &completion_messages,
                         binding,
                         raw_reply.as_str(),
                     )
@@ -2810,16 +2872,36 @@ async fn resolve_provider_turn_reply<R: ConversationRuntime + ?Sized>(
                 reason,
                 latest_tool_payload,
             } => {
-                let guard_messages = build_turn_reply_guard_messages(
-                    &current_preparation.session.messages,
-                    current_continue_phase
-                        .lane_execution
-                        .assistant_preface
-                        .as_str(),
-                    reason.as_str(),
-                    latest_tool_payload.as_ref(),
-                    user_input,
-                );
+                // For agentic followup, use the cleaner completion-pass
+                // message builder so the model sees stripped tool context
+                // and the stronger completion prompt instead of a polluted
+                // history full of short "let me try" messages.
+                let guard_messages = if config.conversation.agentic_tool_followup {
+                    let tool_context = latest_tool_payload
+                        .as_ref()
+                        .map(|p| p.message_context().1)
+                        .unwrap_or("");
+                    build_completion_pass_messages(
+                        &current_preparation.session.messages,
+                        current_continue_phase
+                            .lane_execution
+                            .assistant_preface
+                            .as_str(),
+                        tool_context,
+                        user_input,
+                    )
+                } else {
+                    build_turn_reply_guard_messages(
+                        &current_preparation.session.messages,
+                        current_continue_phase
+                            .lane_execution
+                            .assistant_preface
+                            .as_str(),
+                        reason.as_str(),
+                        latest_tool_payload.as_ref(),
+                        user_input,
+                    )
+                };
                 let reply = request_completion_with_raw_fallback(
                     runtime,
                     &current_continue_phase.followup_config,
@@ -2884,6 +2966,7 @@ fn build_turn_reply_followup_messages(
         followup,
         user_input,
         None,
+        false,
     )
 }
 
@@ -2893,6 +2976,7 @@ fn build_turn_reply_followup_messages_with_warning(
     followup: ToolDrivenFollowupPayload,
     user_input: &str,
     loop_warning_reason: Option<&str>,
+    agentic: bool,
 ) -> Vec<Value> {
     let mut messages = base_messages.to_vec();
     messages.extend(build_tool_driven_followup_tail(
@@ -2901,6 +2985,7 @@ fn build_turn_reply_followup_messages_with_warning(
         user_input,
         loop_warning_reason,
         |label, text| reduce_followup_payload_for_model(label, text).into_owned(),
+        agentic,
     ));
     messages
 }
@@ -4740,9 +4825,15 @@ async fn execute_provider_turn_lane<R: ConversationRuntime + ?Sized>(
     ingress: Option<&ConversationIngressContext>,
 ) -> ProviderTurnLaneExecution {
     let had_tool_intents = !turn.tool_intents.is_empty();
-    let requires_provider_turn_followup = turn.tool_intents.iter().any(|intent| {
-        crate::tools::canonical_tool_name(intent.tool_name.as_str()) == "tool.search"
-    });
+    // When agentic_tool_followup is enabled, ANY tool call triggers a followup
+    // provider turn (agentic multi-step chaining). Otherwise only tool.search does.
+    let requires_provider_turn_followup = if config.conversation.agentic_tool_followup {
+        had_tool_intents
+    } else {
+        turn.tool_intents.iter().any(|intent| {
+            crate::tools::canonical_tool_name(intent.tool_name.as_str()) == "tool.search"
+        })
+    };
     let assistant_preface = turn.assistant_text.clone();
     let lane = preparation.lane_plan.decision.lane;
     let session_context = match runtime.session_context(config, session_id, binding) {

@@ -125,6 +125,106 @@ impl TelegramAdapter {
     }
 }
 
+/// Strip internal tool-result / tool-loop markers that should never reach the user.
+/// These leak through when the agentic turn loop exhausts its followup rounds.
+/// When all lines are markers, attempts to extract a useful summary from the
+/// marker payloads (e.g. tool failure stderr) rather than showing a bare fallback.
+fn sanitize_tool_markers(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    let mut extracted_summaries: Vec<String> = Vec::new();
+
+    for line in text.lines() {
+        let trimmed = line.trim();
+        // Skip lines that are pure internal markers
+        if trimmed.starts_with("[tool_result]")
+            || trimmed.starts_with("[tool_failure]")
+            || trimmed.starts_with("[tool_loop_guard]")
+            || trimmed.starts_with("[tool_loop_warning]")
+        {
+            continue;
+        }
+        // Extract context from tool status lines: "[ok] {..." "[error] {..." "[failed] {..."
+        if let Some(payload) = extract_marker_json_payload(trimmed) {
+            if let Some(summary) = summarize_marker_payload(&payload) {
+                extracted_summaries.push(summary);
+            }
+            continue;
+        }
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        result.push_str(line);
+    }
+    let trimmed = result.trim().to_owned();
+    if !trimmed.is_empty() {
+        return trimmed;
+    }
+    // All natural-language text was stripped — try to produce a useful fallback
+    // from the marker payloads we extracted.
+    if !extracted_summaries.is_empty() {
+        return extracted_summaries.join("\n");
+    }
+    "(no response text)".to_owned()
+}
+
+/// If a line matches `[ok|error|failed] {...}`, return the JSON payload string.
+fn extract_marker_json_payload(trimmed: &str) -> Option<String> {
+    for prefix in &["[ok] ", "[error] ", "[failed] "] {
+        if let Some(rest) = trimmed.strip_prefix(prefix)
+            && rest.ends_with('}')
+        {
+            return Some(rest.to_owned());
+        }
+    }
+    None
+}
+
+/// Try to extract a human-readable summary from a tool marker JSON payload.
+fn summarize_marker_payload(json_str: &str) -> Option<String> {
+    let obj: serde_json::Value = serde_json::from_str(json_str).ok()?;
+    let tool = obj
+        .get("tool")
+        .or_else(|| obj.get("tool_name"))
+        .and_then(|v| v.as_str())
+        .unwrap_or("tool");
+    let status = obj.get("status").and_then(|v| v.as_str()).unwrap_or("");
+
+    // Try to find the most useful text: stderr > stdout > payload_summary
+    if let Some(ps) = obj.get("payload_summary").and_then(|v| v.as_str())
+        && let Ok(inner) = serde_json::from_str::<serde_json::Value>(ps)
+    {
+        let stderr = inner.get("stderr").and_then(|v| v.as_str()).unwrap_or("");
+        let stdout = inner.get("stdout").and_then(|v| v.as_str()).unwrap_or("");
+        let exit_code = inner.get("exit_code").and_then(|v| v.as_i64());
+        if !stderr.is_empty() {
+            let brief = truncate_chars(stderr.trim(), 200);
+            return Some(format!("The {tool} command {status}: {brief}"));
+        }
+        if !stdout.is_empty() {
+            let brief = truncate_chars(stdout.trim(), 200);
+            return Some(format!("The {tool} command returned: {brief}"));
+        }
+        if let Some(code) = exit_code {
+            return Some(format!("The {tool} command exited with code {code}."));
+        }
+    }
+    // Fallback: just note the tool and status
+    if !status.is_empty() {
+        Some(format!("The {tool} call {status}."))
+    } else {
+        None
+    }
+}
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    if s.chars().count() <= max {
+        s.to_owned()
+    } else {
+        let truncated: String = s.chars().take(max).collect();
+        format!("{truncated}…")
+    }
+}
+
 fn split_message_for_telegram(message: &str) -> Vec<String> {
     if message.chars().count() <= TELEGRAM_MAX_MESSAGE_LENGTH {
         return vec![message.to_string()];
@@ -395,6 +495,35 @@ fn build_telegram_message_body(
     body
 }
 
+fn build_telegram_plaintext_message_body(
+    chat_id: i64,
+    text: &str,
+    thread_id: Option<i64>,
+    disable_web_page_preview: bool,
+) -> Value {
+    let mut body = json!({
+        "chat_id": chat_id,
+        "text": text,
+    });
+
+    if let Some(obj) = body.as_object_mut() {
+        if disable_web_page_preview {
+            obj.insert(
+                "disable_web_page_preview".to_string(),
+                serde_json::Value::Bool(true),
+            );
+        }
+        if let Some(tid) = thread_id {
+            obj.insert(
+                "message_thread_id".to_string(),
+                serde_json::Value::Number(tid.into()),
+            );
+        }
+    }
+
+    body
+}
+
 impl TelegramAdapter {
     fn send_typing_action_nonblocking(&self, chat_id: i64) {
         let client = self.http_client.clone();
@@ -437,7 +566,17 @@ impl TelegramAdapter {
         thread_id: Option<i64>,
         text: &str,
     ) -> CliResult<String> {
-        let body = build_telegram_message_body(chat_id, text, thread_id, false);
+        // Guard against empty replies (e.g. model returned only tool_calls with no text)
+        let text = if text.trim().is_empty() {
+            "(no response text)"
+        } else {
+            text
+        };
+        // Sanitize raw tool-result markers that may leak through
+        let text = sanitize_tool_markers(text);
+        let text = text.as_str();
+        let html = markdown_to_telegram_html(text);
+        let body = build_telegram_message_body(chat_id, &html, thread_id, false);
 
         let response = self
             .http_client
@@ -449,6 +588,23 @@ impl TelegramAdapter {
             .json::<Value>()
             .await
             .map_err(|error| format!("telegram sendMessage decode failed: {error}"))?;
+
+        let response = if !response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+            let plain_body = build_telegram_plaintext_message_body(chat_id, text, thread_id, false);
+            self.http_client
+                .post(self.api_url("sendMessage"))
+                .json(&plain_body)
+                .send()
+                .await
+                .map_err(|error| format!("telegram sendMessage plain fallback failed: {error}"))?
+                .json::<Value>()
+                .await
+                .map_err(|error| {
+                    format!("telegram sendMessage plain fallback decode failed: {error}")
+                })?
+        } else {
+            response
+        };
 
         if !response.get("ok").and_then(Value::as_bool).unwrap_or(false) {
             return Err(format!("telegram sendMessage not ok: {response}"));
@@ -630,6 +786,17 @@ impl ChannelAdapter for TelegramAdapter {
 
         let (chat_id, thread_id) = parse_telegram_target(&target.id)?;
 
+        // Guard against empty replies
+        let text = if text.trim().is_empty() {
+            "(no response text)".to_owned()
+        } else {
+            text
+        };
+
+        // Sanitize raw tool-result markers that may leak through when the
+        // agentic turn loop exhausts its rounds without producing a clean reply.
+        let text = sanitize_tool_markers(&text);
+
         let chunks = split_message_for_telegram(&text);
         for (index, chunk) in chunks.iter().enumerate() {
             let text_to_send = if chunks.len() > 1 {
@@ -657,6 +824,26 @@ impl ChannelAdapter for TelegramAdapter {
                 .json::<Value>()
                 .await
                 .map_err(|error| format!("telegram sendMessage decode failed: {error}"))?;
+
+            let payload = if !payload.get("ok").and_then(Value::as_bool).unwrap_or(false) {
+                let plain_body =
+                    build_telegram_plaintext_message_body(chat_id, &text_to_send, thread_id, true);
+                self.http_client
+                    .post(self.api_url("sendMessage"))
+                    .json(&plain_body)
+                    .send()
+                    .await
+                    .map_err(|error| {
+                        format!("telegram sendMessage plain fallback failed: {error}")
+                    })?
+                    .json::<Value>()
+                    .await
+                    .map_err(|error| {
+                        format!("telegram sendMessage plain fallback decode failed: {error}")
+                    })?
+            } else {
+                payload
+            };
 
             if !payload.get("ok").and_then(Value::as_bool).unwrap_or(false) {
                 return Err(format!("telegram sendMessage not ok: {payload}"));

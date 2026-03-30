@@ -653,7 +653,7 @@ pub fn tool_catalog() -> ToolCatalog {
             description: "Execute shell commands",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::ProviderCore,
             visibility_gate: ToolVisibilityGate::Always,
             provider_definition_builder: shell_exec_definition,
         });
@@ -768,7 +768,7 @@ pub fn tool_catalog() -> ToolCatalog {
                 "Open a public web page into a bounded browser session with safe link discovery",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::ProviderCore,
             visibility_gate: ToolVisibilityGate::Browser,
             provider_definition_builder: browser_open_definition,
         });
@@ -799,7 +799,7 @@ pub fn tool_catalog() -> ToolCatalog {
                 "Search the web for APIs, documentation, and error messages using configured web search providers",
             execution_kind: ToolExecutionKind::Core,
             availability: ToolAvailability::Runtime,
-            exposure: ToolExposureClass::Discoverable,
+            exposure: ToolExposureClass::ProviderCore,
             visibility_gate: ToolVisibilityGate::WebSearch,
             provider_definition_builder: web_search_definition,
         });

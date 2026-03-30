@@ -54,12 +54,10 @@ pub(crate) fn validate_shell_command_name(command: &str) -> Result<String, Strin
         return Err("shell.exec requires payload.command".to_owned());
     }
 
-    if trimmed.contains(char::is_whitespace) {
-        return Err(
-            "policy_denied: shell command must not contain embedded whitespace; use `args` instead"
-                .to_owned(),
-        );
-    }
+    // Local models often send the full command line as a single string.
+    // Extract just the first token for policy validation; the shell executor
+    // handles splitting into command + args.
+    let trimmed = trimmed.split_whitespace().next().unwrap_or(trimmed);
 
     if trimmed.contains('/') || trimmed.contains('\\') {
         return Err(format!(

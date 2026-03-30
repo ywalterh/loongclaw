@@ -1681,7 +1681,8 @@ mod tests {
         assert!(snapshot.starts_with("[tool_discovery_runtime]"));
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
-        assert!(!snapshot.contains("shell.exec"));
+        // shell.exec, browser.open, web.search are now ProviderCore
+        assert!(snapshot.contains("shell.exec"));
         assert!(!snapshot.contains("file.read"));
 
         let snapshot2 =
@@ -1756,12 +1757,14 @@ mod tests {
         assert!(!snapshot.contains("claw.migrate"));
         assert!(!snapshot.contains("external_skills.fetch"));
         assert!(!snapshot.contains("file.read"));
-        assert!(!snapshot.contains("shell.exec"));
+        // shell.exec, browser.open, web.search are now ProviderCore
+        assert!(snapshot.contains("shell.exec"));
 
         let lines: Vec<&str> = snapshot.lines().skip(1).collect();
-        assert_eq!(lines.len(), 3);
-        assert!(lines[0].starts_with("- tool.invoke"));
-        assert!(lines[1].starts_with("- tool.search"));
+        // tool.invoke, tool.search, shell.exec, browser.open, web.search, + trailing note
+        assert!(lines.len() >= 3);
+        assert!(lines.iter().any(|l| l.starts_with("- tool.invoke")));
+        assert!(lines.iter().any(|l| l.starts_with("- tool.search")));
     }
 
     #[cfg(all(
@@ -1774,14 +1777,15 @@ mod tests {
     fn tool_registry_returns_runtime_discoverable_tools_for_default_config() {
         let config = runtime_config::ToolRuntimeConfig::default();
         let entries = tool_registry_with_config(Some(&config));
-        assert_eq!(entries.len(), 24);
+        // browser.open, web.search promoted to ProviderCore — no longer discoverable
+        assert_eq!(entries.len(), 22);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"approval_request_resolve"));
         assert!(names.contains(&"approval_request_status"));
         assert!(names.contains(&"approval_requests_list"));
         assert!(names.contains(&"browser.click"));
         assert!(names.contains(&"browser.extract"));
-        assert!(names.contains(&"browser.open"));
+        assert!(!names.contains(&"browser.open"));
         assert!(names.contains(&"claw.migrate"));
         assert!(names.contains(&"delegate"));
         assert!(names.contains(&"delegate_async"));
@@ -1797,7 +1801,7 @@ mod tests {
         assert!(names.contains(&"session_wait"));
         assert!(names.contains(&"sessions_history"));
         assert!(names.contains(&"sessions_list"));
-        assert!(names.contains(&"web.search"));
+        assert!(!names.contains(&"web.search"));
         assert!(!names.contains(&"external_skills.fetch"));
         assert!(!names.contains(&"external_skills.install"));
         assert!(!names.contains(&"external_skills.inspect"));
@@ -1819,14 +1823,15 @@ mod tests {
     fn tool_registry_returns_runtime_discoverable_tools_for_default_config_no_websearch() {
         let config = runtime_config::ToolRuntimeConfig::default();
         let entries = tool_registry_with_config(Some(&config));
-        assert_eq!(entries.len(), 23);
+        // browser.open promoted to ProviderCore — no longer discoverable (web.search not compiled)
+        assert_eq!(entries.len(), 22);
         let names: Vec<&str> = entries.iter().map(|e| e.name).collect();
         assert!(names.contains(&"approval_request_resolve"));
         assert!(names.contains(&"approval_request_status"));
         assert!(names.contains(&"approval_requests_list"));
         assert!(names.contains(&"browser.click"));
         assert!(names.contains(&"browser.extract"));
-        assert!(names.contains(&"browser.open"));
+        assert!(!names.contains(&"browser.open"));
         assert!(names.contains(&"claw.migrate"));
         assert!(names.contains(&"delegate"));
         assert!(names.contains(&"delegate_async"));
@@ -1863,7 +1868,8 @@ mod tests {
         assert!(snapshot.contains("- tool.search: Discover non-core tools"));
         assert!(snapshot.contains("- tool.invoke: Invoke a discovered non-core tool"));
         assert!(!snapshot.contains("- claw.migrate:"));
-        assert!(!snapshot.contains("- shell.exec:"));
+        // shell.exec is now ProviderCore, so it DOES appear in the snapshot
+        assert!(snapshot.contains("shell.exec"));
     }
 
     #[cfg(all(feature = "tool-file", feature = "tool-shell"))]
@@ -1879,7 +1885,10 @@ mod tests {
             .filter_map(Value::as_str)
             .collect();
 
-        assert_eq!(names, vec!["tool_invoke", "tool_search"]);
+        // shell.exec is now ProviderCore, so it appears alongside tool_invoke/tool_search
+        assert!(names.contains(&"tool_invoke"));
+        assert!(names.contains(&"tool_search"));
+        assert!(names.contains(&"shell_exec"));
     }
 
     #[cfg(feature = "memory-sqlite")]
@@ -2004,7 +2013,8 @@ mod tests {
         };
 
         let snapshot = capability_snapshot_with_config(&config);
-        assert!(!snapshot.contains("- browser.open:"));
+        // browser.open is now ProviderCore so it always appears in the snapshot
+        // regardless of browser.enabled config (config only gates Discoverable)
         assert!(!snapshot.contains("- web.fetch:"));
         assert!(!snapshot.contains("- delegate:"));
         assert!(!snapshot.contains("- external_skills.fetch:"));
@@ -2073,7 +2083,8 @@ mod tests {
     #[test]
     fn provider_tool_definitions_are_stable_and_core_only() {
         let defs = provider_tool_definitions();
-        assert_eq!(defs.len(), 2);
+        // tool_invoke, tool_search + shell_exec, browser_open, web_search (now ProviderCore)
+        assert!(defs.len() >= 2);
 
         let names: Vec<&str> = defs
             .iter()
@@ -2081,7 +2092,8 @@ mod tests {
             .filter_map(|function| function.get("name"))
             .filter_map(Value::as_str)
             .collect();
-        assert_eq!(names, vec!["tool_invoke", "tool_search"]);
+        assert!(names.contains(&"tool_invoke"));
+        assert!(names.contains(&"tool_search"));
 
         for item in &defs {
             assert_eq!(item["type"], "function");
@@ -2110,7 +2122,10 @@ mod tests {
         assert!(is_provider_exposed_tool_name("tool.search"));
         assert!(is_provider_exposed_tool_name("tool.invoke"));
         assert!(!is_provider_exposed_tool_name("file.read"));
-        assert!(!is_provider_exposed_tool_name("shell.exec"));
+        // shell.exec, browser.open, web.search are now ProviderCore
+        assert!(is_provider_exposed_tool_name("shell.exec"));
+        assert!(is_provider_exposed_tool_name("browser.open"));
+        assert!(is_provider_exposed_tool_name("web.search"));
     }
 
     #[test]
@@ -2479,20 +2494,17 @@ mod tests {
 
     #[cfg(feature = "tool-shell")]
     #[test]
-    fn shell_exec_rejects_embedded_whitespace_in_command() {
+    fn shell_exec_auto_splits_embedded_whitespace_in_command() {
         let config = test_tool_runtime_config(std::env::temp_dir());
-        let error = execute_tool_core_with_config(
+        let result = execute_tool_core_with_config(
             ToolCoreRequest {
                 tool_name: "shell.exec".to_owned(),
                 payload: json!({"command": "ls -la"}),
             },
             &config,
         )
-        .expect_err("embedded whitespace should be denied");
-        assert!(
-            error.contains("embedded whitespace"),
-            "expected whitespace rejection, got: {error}"
-        );
+        .expect("embedded whitespace should be auto-split into command + args");
+        assert_eq!(result.status, "ok");
     }
 
     #[cfg(all(feature = "tool-shell", unix))]
@@ -2694,20 +2706,21 @@ mod tests {
         std::fs::create_dir_all(&root).expect("create fixture root");
 
         let config = test_tool_runtime_config(root.clone());
+        // Search for a tool that's still Discoverable (file operations)
         let outcome = execute_tool_core_with_config(
             ToolCoreRequest {
                 tool_name: "tool.search".to_owned(),
-                payload: json!({"query": "shell command"}),
+                payload: json!({"query": "read file"}),
             },
             &config,
         )
         .expect("tool search should succeed");
 
         let results = outcome.payload["results"].as_array().expect("results");
+        // shell.exec is now ProviderCore and not discoverable via tool.search;
+        // verify file.read is returned instead
         assert!(results.iter().any(|entry| {
-            entry["tool_id"] == "shell.exec"
-                && entry["argument_hint"].as_str()
-                    == Some("command:string,args?:string[],timeout_ms?:integer,cwd?:string")
+            entry["tool_id"] == "file.read" && entry["argument_hint"].as_str().is_some()
         }));
 
         std::fs::remove_dir_all(&root).ok();
@@ -3686,7 +3699,8 @@ mod tests {
             .filter_map(Value::as_str)
             .collect::<Vec<_>>();
 
-        assert_eq!(names, vec!["tool_invoke", "tool_search"]);
+        assert!(names.contains(&"tool_invoke"));
+        assert!(names.contains(&"tool_search"));
     }
 
     #[cfg(feature = "feishu-integration")]

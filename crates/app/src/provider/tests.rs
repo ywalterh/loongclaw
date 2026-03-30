@@ -966,7 +966,8 @@ fn build_messages_includes_capability_snapshot_block() {
         "system prompt should describe tool.search"
     );
     assert!(system_content.contains("- tool.invoke: Invoke a discovered non-core tool"));
-    assert!(!system_content.contains("shell.exec"));
+    // shell.exec is now ProviderCore, so it appears in the capability snapshot
+    assert!(system_content.contains("shell.exec"));
     assert!(!system_content.contains("file.read"));
     assert!(!system_content.contains("file.write"));
 }

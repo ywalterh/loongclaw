@@ -2194,15 +2194,12 @@ mod tests {
             "sorry, that command failed. let me retry with a simpler approach:"
         );
         assert_eq!(turn.tool_intents.len(), 1);
-        assert_eq!(turn.tool_intents[0].tool_name, "tool.invoke");
-        assert_eq!(turn.tool_intents[0].args_json["tool_id"], "shell.exec");
+        // shell.exec is now ProviderCore, so it's used directly instead of
+        // being wrapped in tool.invoke
+        assert_eq!(turn.tool_intents[0].tool_name, "shell.exec");
         assert_eq!(
-            turn.tool_intents[0].args_json["arguments"],
+            turn.tool_intents[0].args_json,
             json!({"command":"ls /root"})
-        );
-        assert_eq!(
-            turn.tool_intents[0].args_json["lease"],
-            "lease-shell-inline"
         );
         assert_eq!(
             turn.raw_meta["loongclaw_provider_parse"]["inline_function"]["status"],

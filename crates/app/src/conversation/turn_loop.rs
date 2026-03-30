@@ -596,6 +596,7 @@ fn append_tool_driven_followup_messages(
             let reduced = reduce_followup_payload_for_model(label, text);
             followup_payload_budget.truncate_payload(label, reduced.as_ref())
         },
+        false,
     ));
 }
 

@@ -110,6 +110,10 @@ pub struct ConversationConfig {
     pub safe_lane_health_replan_warn_threshold: f64,
     #[serde(default = "default_high_risk_keywords")]
     pub high_risk_keywords: Vec<String>,
+    /// When true, ANY tool call triggers a followup provider turn (agentic multi-step).
+    /// When false (default), only tool.search triggers followup turns.
+    #[serde(default)]
+    pub agentic_tool_followup: bool,
 }
 
 impl Default for ConversationConfig {
@@ -190,6 +194,7 @@ impl Default for ConversationConfig {
             safe_lane_health_replan_warn_threshold: default_safe_lane_health_replan_warn_threshold(
             ),
             high_risk_keywords: default_high_risk_keywords(),
+            agentic_tool_followup: false,
         }
     }
 }

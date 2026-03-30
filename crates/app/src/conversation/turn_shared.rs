@@ -12,7 +12,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use crate::CliResult;
 
-pub const TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to answer the original user request in natural language. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
+pub const TOOL_FOLLOWUP_PROMPT: &str = "IMPORTANT: You MUST respond in natural language now. Use the tool result above to answer the original user request. Do NOT call any more tools — summarize what you have learned so far. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
+pub const AGENTIC_TOOL_FOLLOWUP_PROMPT: &str = "Use the tool result above to continue working on the user's request. You may call additional tools if needed to complete the task. If you have enough information, provide a final natural language answer. Do not include raw JSON, payload wrappers, or status markers unless the user explicitly asks for raw output.";
+pub const COMPLETION_PASS_PROMPT: &str = "You are in a completion-only pass — no tools are available. You MUST produce a natural language response NOW. Summarize what you have learned from the tool results above and answer the user's original request. Do NOT emit tool call syntax, status markers like [tool_result], [ok], or [failed], or raw JSON. Just respond naturally.";
 pub const TOOL_TRUNCATION_HINT_PROMPT: &str = "One or more tool results were truncated for context safety. If exact missing details are needed, explicitly state the truncation and request a narrower rerun.";
 pub const EXTERNAL_SKILL_FOLLOWUP_PROMPT: &str = "An external skill has been loaded into runtime context. Follow its instructions while answering the original user request. Do not restate the skill verbatim unless the user explicitly asks for it.";
 pub const TOOL_LOOP_GUARD_PROMPT: &str = "Detected tool-loop behavior across rounds. Do not repeat identical or cyclical tool calls without new evidence. Adjust strategy (different tool, arguments, or decomposition) or provide the best possible final answer and clearly state remaining gaps.";
@@ -399,7 +401,43 @@ pub fn build_tool_followup_user_prompt(
     tool_result_text: Option<&str>,
     rendered_tool_result_text: Option<&str>,
 ) -> String {
-    let mut sections = vec![TOOL_FOLLOWUP_PROMPT.to_owned()];
+    build_tool_followup_user_prompt_inner(
+        user_input,
+        loop_warning_reason,
+        tool_result_text,
+        rendered_tool_result_text,
+        false,
+    )
+}
+
+pub fn build_agentic_tool_followup_user_prompt(
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    tool_result_text: Option<&str>,
+    rendered_tool_result_text: Option<&str>,
+) -> String {
+    build_tool_followup_user_prompt_inner(
+        user_input,
+        loop_warning_reason,
+        tool_result_text,
+        rendered_tool_result_text,
+        true,
+    )
+}
+
+fn build_tool_followup_user_prompt_inner(
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    tool_result_text: Option<&str>,
+    rendered_tool_result_text: Option<&str>,
+    agentic: bool,
+) -> String {
+    let base_prompt = if agentic {
+        AGENTIC_TOOL_FOLLOWUP_PROMPT
+    } else {
+        TOOL_FOLLOWUP_PROMPT
+    };
+    let mut sections = vec![base_prompt.to_owned()];
     if let Some(reason) = loop_warning_reason {
         sections.push(format!(
             "Loop warning:\n{reason}\nAvoid repeating the same tool call with unchanged results. Try a different tool, adjust arguments, or provide a best-effort final answer if evidence is sufficient."
@@ -713,12 +751,34 @@ fn clone_array_field_if_present(
     }
 }
 
-pub fn build_tool_result_followup_tail<F>(
+#[cfg(test)]
+fn build_tool_result_followup_tail<F>(
+    assistant_preface: &str,
+    tool_result_text: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    build_tool_result_followup_tail_inner(
+        assistant_preface,
+        tool_result_text,
+        user_input,
+        loop_warning_reason,
+        payload_mapper,
+        false,
+    )
+}
+
+fn build_tool_result_followup_tail_inner<F>(
     assistant_preface: &str,
     tool_result_text: &str,
     user_input: &str,
     loop_warning_reason: Option<&str>,
     mut payload_mapper: F,
+    agentic: bool,
 ) -> Vec<Value>
 where
     F: FnMut(&str, &str) -> String,
@@ -748,24 +808,56 @@ where
         "content": format!("[tool_result]\n{bounded_result}"),
     }));
     append_followup_warning(&mut messages, loop_warning_reason);
-    messages.push(serde_json::json!({
-        "role": "user",
-        "content": build_tool_followup_user_prompt(
+    let followup_prompt = if agentic {
+        build_agentic_tool_followup_user_prompt(
             user_input,
             loop_warning_reason,
             Some(tool_result_text),
             Some(bounded_result.as_str()),
-        ),
+        )
+    } else {
+        build_tool_followup_user_prompt(
+            user_input,
+            loop_warning_reason,
+            Some(tool_result_text),
+            Some(bounded_result.as_str()),
+        )
+    };
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": followup_prompt,
     }));
     messages
 }
 
-pub fn build_tool_failure_followup_tail<F>(
+#[cfg(test)]
+fn build_tool_failure_followup_tail<F>(
+    assistant_preface: &str,
+    tool_failure_reason: &str,
+    user_input: &str,
+    loop_warning_reason: Option<&str>,
+    payload_mapper: F,
+) -> Vec<Value>
+where
+    F: FnMut(&str, &str) -> String,
+{
+    build_tool_failure_followup_tail_inner(
+        assistant_preface,
+        tool_failure_reason,
+        user_input,
+        loop_warning_reason,
+        payload_mapper,
+        false,
+    )
+}
+
+fn build_tool_failure_followup_tail_inner<F>(
     assistant_preface: &str,
     tool_failure_reason: &str,
     user_input: &str,
     loop_warning_reason: Option<&str>,
     mut payload_mapper: F,
+    agentic: bool,
 ) -> Vec<Value>
 where
     F: FnMut(&str, &str) -> String,
@@ -778,9 +870,14 @@ where
         "content": format!("[tool_failure]\n{bounded_failure}"),
     }));
     append_followup_warning(&mut messages, loop_warning_reason);
+    let followup_prompt = if agentic {
+        build_agentic_tool_followup_user_prompt(user_input, loop_warning_reason, None, None)
+    } else {
+        build_tool_followup_user_prompt(user_input, loop_warning_reason, None, None)
+    };
     messages.push(serde_json::json!({
         "role": "user",
-        "content": build_tool_followup_user_prompt(user_input, loop_warning_reason, None, None),
+        "content": followup_prompt,
     }));
     messages
 }
@@ -791,25 +888,30 @@ pub fn build_tool_driven_followup_tail<F>(
     user_input: &str,
     loop_warning_reason: Option<&str>,
     payload_mapper: F,
+    agentic: bool,
 ) -> Vec<Value>
 where
     F: FnMut(&str, &str) -> String,
 {
     match payload {
-        ToolDrivenFollowupPayload::ToolResult { text } => build_tool_result_followup_tail(
+        ToolDrivenFollowupPayload::ToolResult { text } => build_tool_result_followup_tail_inner(
             assistant_preface,
             text.as_str(),
             user_input,
             loop_warning_reason,
             payload_mapper,
+            agentic,
         ),
-        ToolDrivenFollowupPayload::ToolFailure { reason } => build_tool_failure_followup_tail(
-            assistant_preface,
-            reason.as_str(),
-            user_input,
-            loop_warning_reason,
-            payload_mapper,
-        ),
+        ToolDrivenFollowupPayload::ToolFailure { reason } => {
+            build_tool_failure_followup_tail_inner(
+                assistant_preface,
+                reason.as_str(),
+                user_input,
+                loop_warning_reason,
+                payload_mapper,
+                agentic,
+            )
+        }
     }
 }
 
@@ -872,6 +974,87 @@ pub async fn request_completion_with_raw_fallback<R: ConversationRuntime + ?Size
         }
         Err(_) => raw_reply.to_owned(),
     }
+}
+
+/// Build messages for the completion pass when the agentic turn loop exhausts
+/// its rounds. Replaces the final user prompt with `COMPLETION_PASS_PROMPT`
+/// and strips internal `[tool_result]`/`[tool_failure]` prefixes from assistant
+/// messages so the model does not mimic them.
+pub fn build_completion_pass_messages(
+    base_messages: &[Value],
+    assistant_preface: &str,
+    tool_context_summary: &str,
+    user_input: &str,
+) -> Vec<Value> {
+    let mut messages = base_messages.to_vec();
+    let preface = assistant_preface.trim();
+    if !preface.is_empty() {
+        messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": preface,
+        }));
+    }
+    // Provide the tool output as a plain assistant message without internal
+    // marker prefixes, so the model sees the content but does not mimic markers.
+    let clean_context = strip_internal_marker_prefixes(tool_context_summary);
+    if !clean_context.is_empty() {
+        messages.push(serde_json::json!({
+            "role": "assistant",
+            "content": format!("Tool output:\n{clean_context}"),
+        }));
+    }
+    messages.push(serde_json::json!({
+        "role": "user",
+        "content": format!("{}\n\nOriginal request:\n{}", COMPLETION_PASS_PROMPT, user_input),
+    }));
+    messages
+}
+
+/// Remove `[tool_result]`, `[tool_failure]`, `[ok] {...}`, etc. line prefixes
+/// from text so it can be re-injected without the model mimicking them.
+fn strip_internal_marker_prefixes(text: &str) -> String {
+    let mut result = String::with_capacity(text.len());
+    for line in text.lines() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("[tool_result]")
+            || trimmed.starts_with("[tool_failure]")
+            || trimmed.starts_with("[tool_loop_guard]")
+            || trimmed.starts_with("[tool_loop_warning]")
+        {
+            continue;
+        }
+        if (trimmed.starts_with("[ok] {") || trimmed.starts_with("[error] {"))
+            && trimmed.ends_with('}')
+        {
+            // Extract just the JSON payload for context
+            let payload = if let Some(rest) = trimmed.strip_prefix("[ok] ") {
+                rest
+            } else if let Some(rest) = trimmed.strip_prefix("[error] ") {
+                rest
+            } else {
+                trimmed
+            };
+            if !result.is_empty() {
+                result.push('\n');
+            }
+            result.push_str(payload);
+            continue;
+        }
+        if trimmed.starts_with("[failed] {") && trimmed.ends_with('}') {
+            if let Some(rest) = trimmed.strip_prefix("[failed] ") {
+                if !result.is_empty() {
+                    result.push('\n');
+                }
+                result.push_str(rest);
+            }
+            continue;
+        }
+        if !result.is_empty() {
+            result.push('\n');
+        }
+        result.push_str(line);
+    }
+    result.trim().to_owned()
 }
 
 pub fn join_non_empty_lines(parts: &[&str]) -> String {
@@ -1455,6 +1638,7 @@ mod tests {
             "summarize note.md",
             Some("warning"),
             |_, _| "bounded-result".to_owned(),
+            false,
         );
 
         assert!(tail.iter().any(|message| {
@@ -1485,6 +1669,7 @@ mod tests {
             "summarize note.md",
             Some("warning"),
             |_, _| "bounded-failure".to_owned(),
+            false,
         );
 
         assert!(tail.iter().any(|message| {

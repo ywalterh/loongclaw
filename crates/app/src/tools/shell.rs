@@ -28,13 +28,13 @@ pub(super) fn execute_shell_tool_with_config(
             .payload
             .as_object()
             .ok_or_else(|| "shell.exec payload must be an object".to_owned())?;
-        let command = payload
+        let raw_command = payload
             .get("command")
             .and_then(Value::as_str)
             .map(str::trim)
             .filter(|value| !value.is_empty())
             .ok_or_else(|| "shell.exec requires payload.command".to_owned())?;
-        let args = payload
+        let mut explicit_args = payload
             .get("args")
             .and_then(Value::as_array)
             .map(|values| {
@@ -44,16 +44,55 @@ pub(super) fn execute_shell_tool_with_config(
                     .collect::<Vec<_>>()
             })
             .unwrap_or_default();
+
+        // Validate the original command name against shell policy BEFORE any
+        // rewriting (sh -c wrapping, whitespace splitting, etc.).
+        let normalized_command =
+            crate::tools::shell_policy_ext::validate_shell_command_name(raw_command)?;
+        let basename = normalized_command.as_str();
+
+        // Local models often send the full command line as a single string
+        // (e.g. "curl -s http://...") instead of splitting into command + args.
+        // Auto-split when the command field contains whitespace and no explicit
+        // args were provided.
+        //
+        // When the command contains shell operators (pipes, redirects, etc.),
+        // wrap the entire command line in `sh -c` so they are interpreted
+        // correctly instead of being passed as literal arguments.
+        let (command, args) =
+            if raw_command.contains(char::is_whitespace) && explicit_args.is_empty() {
+                if contains_shell_operators(raw_command) {
+                    ("sh".to_owned(), vec!["-c".to_owned(), raw_command.to_owned()])
+                } else {
+                    let mut parts = raw_command.split_whitespace();
+                    let cmd = parts.next().unwrap_or(raw_command);
+                    let mut split_args: Vec<String> = parts.map(str::to_owned).collect();
+                    split_args.append(&mut explicit_args);
+                    (cmd.to_owned(), split_args)
+                }
+            } else if !explicit_args.is_empty()
+                && explicit_args.iter().any(|a| {
+                    a.contains('|') || a.contains('>') || a.contains('<') || a == "&&" || a == "||"
+                })
+            {
+                // The model split the command and args but included shell
+                // operators in the args list — reassemble and run via sh.
+                let mut full = raw_command.to_owned();
+                for arg in &explicit_args {
+                    full.push(' ');
+                    full.push_str(arg);
+                }
+                ("sh".to_owned(), vec!["-c".to_owned(), full])
+            } else {
+                (raw_command.to_owned(), explicit_args)
+            };
+        let command = command.as_str();
         let cwd = payload
             .get("cwd")
             .and_then(Value::as_str)
             .map(PathBuf::from)
             .unwrap_or_else(|| std::env::current_dir().unwrap_or_else(|_| PathBuf::from(".")));
         let timeout_ms = parse_shell_timeout_ms(payload)?;
-
-        let normalized_command =
-            crate::tools::shell_policy_ext::validate_shell_command_name(command)?;
-        let basename = normalized_command.as_str();
 
         if config.shell_deny.contains(basename) {
             return Err(format!(
@@ -73,7 +112,7 @@ pub(super) fn execute_shell_tool_with_config(
         }
 
         let output = run_shell_async(run_shell_command_with_timeout(
-            normalized_command.as_str(),
+            command,
             &args,
             cwd.as_path(),
             timeout_ms,
@@ -99,8 +138,25 @@ pub(super) fn execute_shell_tool_with_config(
     }
 }
 
+/// Returns true if the command string contains shell operators that require
+/// interpretation by a shell (pipes, redirects, logical operators, subshells).
 #[cfg(feature = "tool-shell")]
-const SHELL_EXEC_DEFAULT_TIMEOUT_MS: u64 = 120_000;
+fn contains_shell_operators(cmd: &str) -> bool {
+    // Check for common shell metacharacters. We look for standalone operators
+    // rather than substrings inside quoted text, but since local models rarely
+    // quote properly this is a pragmatic heuristic.
+    cmd.contains('|')
+        || cmd.contains('>')
+        || cmd.contains('<')
+        || cmd.contains("&&")
+        || cmd.contains("||")
+        || cmd.contains(';')
+        || cmd.contains('$')
+        || cmd.contains('`')
+}
+
+#[cfg(feature = "tool-shell")]
+const SHELL_EXEC_DEFAULT_TIMEOUT_MS: u64 = 30_000;
 #[cfg(feature = "tool-shell")]
 const SHELL_EXEC_MAX_TIMEOUT_MS: u64 = 600_000;
 #[cfg(feature = "tool-shell")]

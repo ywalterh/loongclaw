@@ -1829,7 +1829,8 @@ async fn default_runtime_build_messages_respects_restricted_tool_view() {
     assert!(system_content.contains("Non-core tools are intentionally hidden"));
     assert!(!system_content.contains("- file.read:"));
     assert!(!system_content.contains("- file.write:"));
-    assert!(!system_content.contains("- shell.exec:"));
+    // shell.exec is now ProviderCore, so it appears in the capability snapshot
+    assert!(system_content.contains("shell.exec"));
 }
 
 #[cfg(feature = "memory-sqlite")]
@@ -8352,18 +8353,12 @@ fn turn_engine_denies_known_tool_outside_restricted_view() {
         &crate::tools::ToolView::from_tool_names(["file.read"]),
     );
 
+    // shell.exec is now ProviderCore, so it's always visible to the turn engine.
+    // Without a kernel context it falls through to kernel_context_required.
     match result {
         TurnResult::ToolDenied(failure) => {
             assert_eq!(failure.kind, TurnFailureKind::PolicyDenied);
-            assert_eq!(failure.code, "tool_not_found");
-            assert!(
-                failure.reason.contains("tool_not_found"),
-                "failure={failure:?}"
-            );
-            assert!(
-                !failure.reason.contains("shell.exec"),
-                "provider denial should not leak hidden tool names: {failure:?}"
-            );
+            assert_eq!(failure.code, "kernel_context_required");
         }
         other @ TurnResult::FinalText(_)
         | other @ TurnResult::StreamingText(_)
